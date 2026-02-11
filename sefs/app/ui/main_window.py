@@ -69,8 +69,27 @@ class MainWindow(QMainWindow):
             self.stop_monitoring_signal.emit()
             self.log_panel.add_log("Monitoring stopped.")
 
-    @pyqtSlot(dict)
-    def update_ui_state(self, state):
-        # state probably contains lists of files and coords
-        # This will be connected to the worker
-        pass
+    @pyqtSlot(object, object)
+    def update_graph_display(self, files_data, reduced_coords):
+        """Update graph visualization with file data and coordinates"""
+        if not files_data or not reduced_coords:
+            return
+            
+        # Convert tuple data to dict format for graph view
+        formatted_data = []
+        for file_info in files_data:
+            if isinstance(file_info, (list, tuple)):
+                # Format: (id, path, hash, embedding, cluster_id, last_modified, content_sample)
+                file_dict = {
+                    'path': file_info[1],
+                    'cluster_id': file_info[4],
+                    'content_sample': file_info[6] if len(file_info) > 6 else '',
+                    'cluster_name': f"Cluster {file_info[4]}"
+                }
+                formatted_data.append(file_dict)
+            else:
+                formatted_data.append(file_info)
+        
+        # Update graph
+        self.graph_view.update_graph(formatted_data, reduced_coords)
+        self.log_panel.add_log(f"Graph updated: {len(formatted_data)} files")

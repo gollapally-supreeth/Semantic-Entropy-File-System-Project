@@ -13,13 +13,21 @@ class AINamer:
         if self.enabled:
             try:
                 genai.configure(api_key=Config.GEMINI_API_KEY)
-                self.model = genai.GenerativeModel(Config.GEMINI_MODEL)
-                print("AI Naming Service: Enabled ✓")
+                # Use models/ prefix for API compatibility
+                model_name = f"models/{Config.GEMINI_MODEL}" if not Config.GEMINI_MODEL.startswith("models/") else Config.GEMINI_MODEL
+                self.model = genai.GenerativeModel(model_name)
+                print("✓ AI Naming Service: Enabled")
+                print(f"  Model: {Config.GEMINI_MODEL}")
+                print(f"  API Key: {Config.GEMINI_API_KEY[:20]}...")
             except Exception as e:
-                print(f"AI Naming Service: Failed to initialize - {e}")
+                print(f"✗ AI Naming Service: Failed to initialize")
+                print(f"  Error: {e}")
                 self.enabled = False
         else:
-            print("AI Naming Service: Disabled (no API key or USE_AI_NAMING=False)")
+            if not Config.USE_AI_NAMING:
+                print("AI Naming Service: Disabled (USE_AI_NAMING=False)")
+            elif not Config.GEMINI_API_KEY:
+                print("AI Naming Service: Disabled (no API key)")
 
     def generate_folder_name(self, text_samples, cluster_id):
         """
@@ -76,22 +84,24 @@ Rules:
 
 Folder name:"""
 
+            print(f"  Calling Gemini API...")
             response = self.model.generate_content(prompt)
             name = response.text.strip()
+            print(f"  API Response: '{name}'")
             
             # Clean and validate
             name = self._sanitize_name(name)
             
             if name and len(name) > 2 and len(name) < 60:
                 self.cache[cache_key] = name
-                print(f"AI Naming: '{name}' for cluster {cluster_id} ✓")
+                print(f"  ✓ AI Named: '{name}'")
                 return name
             else:
-                print(f"AI Naming: Invalid response '{name}', using fallback")
+                print(f"  ✗ Invalid AI response, using fallback")
                 return f"Semantic_Cluster_{cluster_id}"
                 
         except Exception as e:
-            print(f"AI Naming Error: {e}")
+            print(f"  ✗ AI Naming Error: {type(e).__name__}: {str(e)}")
             return f"Semantic_Cluster_{cluster_id}"
     
     def _sanitize_name(self, name):

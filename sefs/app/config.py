@@ -1,4 +1,8 @@
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 class Config:
     APP_NAME = "Semantic Entropy File System"
@@ -12,9 +16,9 @@ class Config:
     DBSCAN_MIN_SAMPLES = 2  # Increased to 2 for more stable clusters
     
     # AI Naming Configuration
-    USE_AI_NAMING = True  # Set to False to use generic names
+    USE_AI_NAMING = False  # Temporarily disabled due to API compatibility issues
     GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')  # Set via environment variable
-    GEMINI_MODEL = 'gemini-1.5-flash'
+    GEMINI_MODEL = 'gemini-pro'  # Free tier stable model
     
     # We restrict to text-readable files for semantic analysis
     EXTENSIONS = ['.txt', '.pdf', '.md', '.log', '.csv', '.docx', '.doc']

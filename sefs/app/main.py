@@ -320,7 +320,7 @@ class SEFSService:
         
         self.worker = Worker(root_path)
         self.worker.log_signal.connect(main_window.log_panel.add_log)
-        self.worker.update_graph_signal.connect(main_window.graph_view.update_graph)
+        self.worker.update_graph_signal.connect(main_window.update_graph_display)
         self.worker.start()
 
     def stop_monitoring(self):
