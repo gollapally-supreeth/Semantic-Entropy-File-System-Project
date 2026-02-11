@@ -1,14 +1,15 @@
+from sentence_transformers import SentenceTransformer
 import os
 import hashlib
+import fitz  # PyMuPDF
+from .config import Config
 
 class EmbeddingEngine:
-    """
-    Refactored to only handle file hashing.
-    Name kept as EmbeddingEngine to minimize immediate refactoring validation, 
-    but logic is purely hashing now.
-    """
     def __init__(self):
-        pass
+        # Initialize the model.
+        print("Loading Embedding Model...")
+        self.model = SentenceTransformer(Config.EMBEDDING_MODEL_NAME)
+        print("Model Loaded.")
 
     def compute_file_hash(self, file_path):
         """Computes SHA256 hash of the file content."""
@@ -22,12 +23,51 @@ class EmbeddingEngine:
             print(f"Error hashing file {file_path}: {e}")
             return None
 
+    def extract_text(self, file_path):
+        """Extracts text from PDF, TXT, or DOCX files."""
+        text = ""
+        try:
+            ext = os.path.splitext(file_path)[1].lower()
+            # Basic text reading
+            if ext in ['.txt', '.md', '.log', '.csv', '.py', '.js', '.html']:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    text = f.read(Config.MAX_TEXT_LENGTH)
+            elif ext == '.pdf':
+                doc = fitz.open(file_path)
+                for page in doc:
+                    text += page.get_text()
+                    if len(text) > Config.MAX_TEXT_LENGTH:
+                        break
+                text = text[:Config.MAX_TEXT_LENGTH]
+                doc.close()
+            elif ext in ['.docx', '.doc']:
+                # Extract from Word documents
+                try:
+                    import docx
+                    doc = docx.Document(file_path)
+                    for para in doc.paragraphs:
+                        text += para.text + "\n"
+                        if len(text) > Config.MAX_TEXT_LENGTH:
+                            break
+                    text = text[:Config.MAX_TEXT_LENGTH]
+                except ImportError:
+                    print("python-docx not installed, skipping .docx file")
+                except Exception as e:
+                    print(f"Error reading .docx file: {e}")
+        except Exception as e:
+            print(f"Error reading file {file_path}: {e}")
+            return None
+        return text
+
+    def generate_embedding(self, text):
+        """Generates embedding vector for the given text."""
+        if not text:
+            return None
+        return self.model.encode(text)
+
     def process_file(self, file_path):
-        """
-        Formerly generated embeddings. Now just returns a dummy value 
-        to indicate successful processing (since we only care about hash/existence).
-        """
-        # We don't need text extraction or embedding anymore.
-        # Just return a non-None value to signal "processed".
-        # We return a dummy bytes object to satisfy DB BLOB constraint if we keep schema.
-        return b'\x00' 
+        """Orchestrates reading and embedding generation."""
+        text = self.extract_text(file_path)
+        if text and len(text.strip()) > 0:
+            return self.generate_embedding(text)
+        return None

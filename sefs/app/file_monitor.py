@@ -35,8 +35,24 @@ class SEFSEventHandler(FileSystemEventHandler):
 
     def _is_valid_file(self, path):
         import os
-        ext = os.path.splitext(path)[1].lower()
-        return ext in Config.EXTENSIONS
+        # Ignore hidden files or temporary system files
+        filename = os.path.basename(path)
+        if filename.startswith('.'):
+            return False
+        if filename.endswith('.tmp') or filename.endswith('.crdownload'): 
+            return False
+        
+        # We also want to ignore the folder names we create to avoid loops?
+        # Watchdog gives us updates on files inside folders.
+        # If we move a file INTO a folder, we get a move event.
+        # We need to make sure we don't infinitely process it.
+        # But `main.py` handles "if already in correct folder".
+        
+        # Also ignore the DB file itself!
+        if 'sefs.db' in filename:
+            return False
+            
+        return os.path.isfile(path)
 
     def _trigger(self, event_type, path):
         # Simple debounce

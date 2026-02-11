@@ -1,64 +1,48 @@
-import os
-import random
+from sklearn.cluster import DBSCAN
+from sklearn.decomposition import PCA
+import numpy as np
 from .config import Config
 
 class ClusteringEngine:
     def __init__(self):
-        pass
+        self.dbscan = DBSCAN(eps=Config.DBSCAN_EPS, min_samples=Config.DBSCAN_MIN_SAMPLES, metric='cosine')
 
-    def perform_clustering(self, file_paths):
+    def perform_clustering(self, embeddings):
         """
-        Returns cluster IDs based on file extensions.
-        We can map extensions to integer IDs.
+        Performs DBSCAN clustering on the embeddings.
+        Returns cluster labels.
         """
-        if not file_paths:
+        if not embeddings or len(embeddings) == 0:
             return []
-
-        # Create a deterministic mapping for current extensions
-        # .txt -> 0, .pdf -> 1, etc.
-        # sorted extensions to ensure stability
-        exts = sorted(Config.EXTENSIONS)
-        ext_map = {ext: i for i, ext in enumerate(exts)}
         
-        labels = []
-        for path in file_paths:
-            ext = os.path.splitext(path)[1].lower()
-            labels.append(ext_map.get(ext, -1)) # -1 for unk
-            
+        X = np.array(embeddings)
+        
+        # If fewer samples than min_samples, we might get all noise (-1)
+        # But DBSCAN handles it (returns -1)
+        labels = self.dbscan.fit_predict(X)
         return labels
 
-    def reduce_dimensions(self, file_paths):
+    def reduce_dimensions(self, embeddings):
         """
-        Returns 2D coords for visualization.
-        Groups files by extension in separate areas.
+        Reduces embeddings to 2D for visualization using PCA.
+        Returns a list of (x, y) tuples.
         """
-        if not file_paths:
+        if not embeddings or len(embeddings) == 0:
             return []
 
-        exts = sorted(Config.EXTENSIONS)
-        ext_map = {ext: i for i, ext in enumerate(exts)}
-        num_clusters = len(exts)
+        X = np.array(embeddings)
+        n_samples = X.shape[0]
         
-        coords = []
-        import math
-        
-        # Center points for clusters (arranged in a circle)
-        radius = 5.0
-        centers = {}
-        for i, ext in enumerate(exts):
-            angle = (2 * math.pi * i) / num_clusters
-            cx = radius * math.cos(angle)
-            cy = radius * math.sin(angle)
-            centers[ext] = (cx, cy)
+        if n_samples < 2:
+            return [(0.0, 0.0)] * n_samples
 
-        for path in file_paths:
-            ext = os.path.splitext(path)[1].lower()
-            cx, cy = centers.get(ext, (0, 0))
+        # Attempt 2 components
+        n_components = min(n_samples, 2)
+        pca = PCA(n_components=n_components)
+        reduced = pca.fit_transform(X)
+        
+        # If we only got 1 component, pad with 0
+        if n_components == 1:
+            return [(float(x[0]), 0.0) for x in reduced]
             
-            # Add some jitter/spread
-            jx = random.uniform(-1, 1)
-            jy = random.uniform(-1, 1)
-            
-            coords.append((cx + jx, cy + jy))
-            
-        return coords
+        return reduced.tolist()
