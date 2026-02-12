@@ -114,15 +114,30 @@ class Worker(QThread):
 
     def process_event(self, event_type, path):
         path = os.path.normpath(path)
-        self.log_signal.emit(f"Event: {event_type} - {os.path.basename(path)}")
         
-        # Skip if file is in an organized subfolder (not root level)
-        if os.path.dirname(path) != self.root_path:
+        # Check if file extension is supported
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in Config.EXTENSIONS:
             return
         
+        # CRITICAL: Ignore ALL events for files in organized subfolders
+        # This prevents infinite loop during file organization
+        relative_path = os.path.relpath(path, self.root_path)
+        path_parts = relative_path.split(os.sep)
+        
+        # If file is in a subfolder (organized), completely ignore it
+        if len(path_parts) > 1:
+            print(f"DEBUG: Ignoring {event_type} event for organized file: {os.path.basename(path)}")
+            return
+        
+        self.log_signal.emit(f"Event: {event_type} - {os.path.basename(path)}")
+        
         if event_type == "created":
-            self.process_file(path)
-            self.recluster_and_update()
+            # Add small delay to ensure file write is complete
+            time.sleep(0.5)
+            if os.path.exists(path):
+                self.process_file(path)
+                self.recluster_and_update()
         elif event_type == "modified":
             # Check if file content actually changed by comparing hash
             existing = self.db.get_file(path)
@@ -132,13 +147,15 @@ class Worker(QThread):
                     print(f"DEBUG: Modification detected but content unchanged for {path}")
                     return
             # Content changed, reprocess
-            self.process_file(path)
-            self.recluster_and_update()
+            if os.path.exists(path):
+                self.process_file(path)
+                self.recluster_and_update()
         elif event_type == "deleted":
+            # DON'T recluster on delete - it's probably a file being moved to organized folder
+            # Only remove from DB
+            print(f"DEBUG: File deleted from root: {os.path.basename(path)}")
             self.db.remove_file(path)
-            self.recluster_and_update() # Recluster after deletion
-        # For 'moved' events, the file monitor typically reports a 'deleted' event for the old path
-        # and a 'created' event for the new path. These are handled by the above logic.
+            # NO RECLUSTER HERE - prevents loop!
 
     def process_file(self, file_path):
         # Normalize path
@@ -193,11 +210,11 @@ class Worker(QThread):
 
     def recluster_and_update(self):
         """
-        Per-Type Clustering with Content-based AI Naming:
-        1. Group files by extension
-        2. Cluster each type separately
-        3. Use CACHED content samples for AI naming (no file re-reading!)
-        4. Move files to Type/AI_Named_Folder structure
+        SEMANTIC CLUSTERING - Cluster ALL files together by content!
+        1. Get all files regardless of extension
+        2. Cluster ALL together using HDBSCAN + UMAP
+        3. Generate AI names for semantic clusters
+        4. Move files to Cluster/Type structure
         """
         import numpy as np
         
@@ -206,105 +223,91 @@ class Worker(QThread):
         if not rows:
             return
 
-        # Group files by extension
-        type_groups = {}  # {extension: [(row, embedding), ...]}
+        # Collect ALL files with embeddings
+        all_files = []
+        all_embeddings = []
         
         for row in rows:
             # row: id, path, hash, embedding_blob, cluster_id, last_mod, content_sample
             if row[3] and len(row[3]) > 2:  # Has valid embedding
                 try:
                     emb = np.frombuffer(row[3], dtype=np.float32)
-                    ext = os.path.splitext(row[1])[1].lower()
-                    if ext not in type_groups:
-                        type_groups[ext] = []
-                    type_groups[ext].append((row, emb))
+                    all_files.append(row)
+                    all_embeddings.append(emb)
                 except Exception as e:
                     print(f"DEBUG: Error loading embedding: {e}")
 
-        if not type_groups:
+        if not all_files:
             print("DEBUG: No files with embeddings found")
             return
-
-        # 2. Cluster each type separately and generate AI names
-        all_files_data = []
-        all_coords = []
         
-        for ext, items in type_groups.items():
-            if not items:
-                continue
+        print(f"DEBUG: Clustering {len(all_files)} files SEMANTICALLY (all types together)")
+
+        # 2. Cluster ALL files together by semantic content
+        labels = self.clusterer.perform_clustering(all_embeddings)
+        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+        print(f"DEBUG: Found {n_clusters} semantic clusters across all file types")
+        
+        # 3. Generate AI names for each semantic cluster
+        clusters = set(labels)
+        cluster_names = {}  # {cluster_id: "AI_Name"}
+        
+        for cluster_id in clusters:
+            # Get content samples from this cluster
+            content_samples = []
+            for i, lbl in enumerate(labels):
+                if lbl == cluster_id:
+                    row = all_files[i]
+                    if row[6]:  # content_sample
+                        content_samples.append(row[6])
+            
+            print(f"DEBUG: Generating AI name for cluster {cluster_id} with {len(content_samples)} files")
+            
+            # Generate AI name
+            ai_name = self.ai_namer.generate_folder_name(content_samples[:5], cluster_id)
+            cluster_names[cluster_id] = ai_name
+            print(f"DEBUG: Cluster {cluster_id} → '{ai_name}'")
+        
+        # 4. Move files to Cluster/Type structure
+        all_files_data = []
+        
+        for i, row in enumerate(all_files):
+            file_path = os.path.normpath(row[1])
+            new_cluster = int(labels[i])
+            folder_name = cluster_names.get(new_cluster, f"Semantic_Cluster_{new_cluster}")
+            
+            # Update cluster in DB
+            self.db.update_cluster(file_path, new_cluster)
+            
+            # Move file to Cluster/Type/file structure
+            new_path = self.folder_manager.move_file(file_path, folder_name, self.root_path)
+            
+            if new_path and new_path != file_path:
+                # File was moved - update DB path
+                self.db.remove_file(file_path)
+                self.db.upsert_file(
+                    new_path,
+                    row[2],  # hash
+                    row[3],  # embedding
+                    datetime.datetime.now(),
+                    row[6]   # content_sample
+                )
+                self.db.update_cluster(new_path, new_cluster)
+                self.log_signal.emit(f"→ {folder_name}/{os.path.basename(new_path)}")
                 
-            print(f"DEBUG: Processing {len(items)} files of type {ext}")
-            rows_for_type = [item[0] for item in items]
-            embeddings_for_type = [item[1] for item in items]
-            
-            # Cluster this type
-            labels = self.clusterer.perform_clustering(embeddings_for_type)
-            print(f"DEBUG: {ext} clustered into {len(set(labels))} groups")
-            
-            # Generate AI names for each cluster in this type
-            clusters_in_type = set(labels)
-            cluster_names = {}  # {cluster_id: "AI_Name"}
-            
-            for cluster_id in clusters_in_type:
-                # Get content samples from DB (NOT by reading files!)
-                content_samples = []
-                for i, lbl in enumerate(labels):
-                    if lbl == cluster_id:
-                        row = rows_for_type[i]
-                        if row[6]:  # content_sample is at index 6
-                            content_samples.append(row[6])
-                
-                print(f"DEBUG: Generating AI name for {ext} cluster {cluster_id} with {len(content_samples)} samples")
-                
-                # Generate AI name using cached content
-                ai_name = self.ai_namer.generate_folder_name(content_samples[:5], cluster_id)
-                cluster_names[cluster_id] = ai_name
-                print(f"DEBUG: {ext} Cluster {cluster_id} → '{ai_name}'")
-            
-            # Process files in this type
-            for i, row in enumerate(rows_for_type):
-                file_path = os.path.normpath(row[1])
-                old_cluster = row[4]
-                new_cluster = int(labels[i])
-                folder_name = cluster_names.get(new_cluster, f"Semantic_Cluster_{new_cluster}")
-                
-                # Always move to ensure correct location (even if cluster unchanged)
-                if True:  # Always attempt to organize
-                    self.log_signal.emit(f"Organizing {os.path.basename(file_path)}")
-                    
-                    # Update cluster in DB first
-                    self.db.update_cluster(file_path, new_cluster)
-                    
-                    # MOVE FILE with AI name
-                    new_path = self.folder_manager.move_file(file_path, folder_name, self.root_path)
-                    
-                    if new_path and new_path != file_path:
-                        # File was moved - update DB path
-                        self.db.remove_file(file_path)
-                        self.db.upsert_file(
-                            new_path, 
-                            row[2],  # hash
-                            row[3],  # embedding
-                            datetime.datetime.now(),
-                            row[6]   # content_sample
-                        )
-                        self.db.update_cluster(new_path, new_cluster)
-                        self.log_signal.emit(f"→ {folder_name}")
-                        
-                        # Update for UI
-                        row = list(row)
-                        row[1] = new_path
-                        rows_for_type[i] = tuple(row)
-            
-            # Reduce dimensions for visualization
-            coords = self.clusterer.reduce_dimensions(embeddings_for_type)
-            all_coords.extend(coords)
+                # Update row for UI
+                row = list(row)
+                row[1] = new_path
+                row[4] = new_cluster
+                all_files[i] = tuple(row)
             
             # Prepare UI data
-            for i, row in enumerate(rows_for_type):
-                display_row = list(row)
-                display_row[4] = int(labels[i])
-                all_files_data.append(display_row)
+            display_row = list(all_files[i])
+            display_row[4] = new_cluster
+            all_files_data.append(display_row)
+        
+        # 5. Visualization
+        all_coords = self.clusterer.reduce_dimensions(all_embeddings)
         
         # 5. Update UI
         self.update_graph_signal.emit(all_files_data, all_coords)

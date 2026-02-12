@@ -45,7 +45,8 @@ class FolderManager:
 
     def move_file(self, file_path, folder_name, root_path):
         """
-        Moves file to: Root / Type_Folder / AI_Named_Folder / File
+        Moves file to: Root / Cluster_Folder / Type_Folder / File
+        NEW STRUCTURE: Semantic clusters first, then file types within each cluster
         """
         # Normalize all paths
         file_path = os.path.normpath(file_path)
@@ -57,14 +58,14 @@ class FolderManager:
 
         ext = os.path.splitext(file_path)[1].lower()
         
-        # 1. Determine Type Folder
-        type_folder = self._get_type_folder_name(ext)
-        
-        # 2. Use provided AI folder name
+        # 1. Use provided cluster/semantic folder name (e.g., "Finance", "AI_Research")
         cluster_folder = folder_name
         
-        # Full Target Directory
-        target_dir = os.path.join(root_path, type_folder, cluster_folder)
+        # 2. Determine Type Folder within the cluster
+        type_folder = self._get_type_folder_name(ext)
+        
+        # Full Target Directory: Root / Cluster / Type
+        target_dir = os.path.join(root_path, cluster_folder, type_folder)
         
         # Ensure target folder exists
         if not os.path.exists(target_dir):
@@ -83,12 +84,10 @@ class FolderManager:
         # Handle name collision - replace existing file
         if os.path.exists(destination_path):
             try:
-                # Remove old version and replace with new one
                 os.remove(destination_path)
                 print(f"DEBUG: Replaced existing file at {destination_path}")
             except Exception as e:
                 print(f"Warning: Could not remove old file: {e}")
-                # Only create timestamped version if we can't replace
                 base, ext = os.path.splitext(filename)
                 timestamp = int(time.time())
                 new_filename = f"{base}_{timestamp}{ext}"

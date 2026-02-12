@@ -60,10 +60,39 @@ class EmbeddingEngine:
         return text
 
     def generate_embedding(self, text):
-        """Generates embedding vector for the given text."""
-        if not text:
+        """Generates semantic embedding using neural sentence transformer."""
+        if not text or len(text.strip()) == 0:
             return None
-        return self.model.encode(text)
+        
+        try:
+            # Clean and preprocess text for better embeddings
+            cleaned_text = self._preprocess_text(text)
+            
+            # Generate embedding using neural network
+            embedding = self.model.encode(cleaned_text, convert_to_numpy=True)
+            return embedding
+        except Exception as e:
+            print(f"Error generating embedding: {e}")
+            return None
+    
+    def _preprocess_text(self, text):
+        """Clean and preprocess text for better semantic embeddings"""
+        # Remove excessive whitespace
+        text = ' '.join(text.split())
+        
+        # Remove special characters but keep punctuation for context
+        import re
+        text = re.sub(r'[^\w\s\.\,\!\?\-]', ' ', text)
+        
+        # Limit length while keeping complete sentences
+        if len(text) > Config.MAX_TEXT_LENGTH:
+            text = text[:Config.MAX_TEXT_LENGTH]
+            # Try to end at sentence boundary
+            last_period = text.rfind('.')
+            if last_period > Config.MAX_TEXT_LENGTH * 0.8:
+                text = text[:last_period + 1]
+        
+        return text.strip()
 
     def process_file(self, file_path):
         """Orchestrates reading and embedding generation."""

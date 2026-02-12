@@ -11,7 +11,7 @@ class Config:
     
     # Semantic params
     MAX_TEXT_LENGTH = 10000
-    EMBEDDING_MODEL_NAME = 'all-MiniLM-L6-v2'
+    EMBEDDING_MODEL_NAME = 'all-mpnet-base-v2'  # Upgraded from MiniLM for better accuracy
     DBSCAN_EPS = 0.3  # Reduced for better semantic separation (was 0.5)
     DBSCAN_MIN_SAMPLES = 2  # Increased to 2 for more stable clusters
     

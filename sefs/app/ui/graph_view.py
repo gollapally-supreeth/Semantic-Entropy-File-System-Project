@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (QGraphicsView, QGraphicsScene, QGraphicsEllipseItem, 
-                             QGraphicsTextItem, QGraphicsLineItem, QGraphicsPathItem)
+                             QGraphicsTextItem, QGraphicsPathItem)
 from PyQt6.QtGui import QBrush, QPen, QColor, QPainter, QFont, QPainterPath, QRadialGradient
-from PyQt6.QtCore import Qt, QLineF, QPointF
+from PyQt6.QtCore import Qt, QPointF
 import os
 import subprocess
 import platform
@@ -13,7 +13,7 @@ class FileNode(QGraphicsEllipseItem):
     """Interactive node with modern gradient styling"""
     
     def __init__(self, file_data, color, node_type='file', parent=None):
-        size = 50 if node_type == 'root' else 35 if node_type == 'cluster' else 20
+        size = 50 if node_type == 'root' else 35 if node_type == 'cluster' else 25 if node_type == 'type' else 18
         super().__init__(-size/2, -size/2, size, size, parent)
         
         self.file_data = file_data
@@ -28,7 +28,7 @@ class FileNode(QGraphicsEllipseItem):
         
         self.setBrush(QBrush(gradient))
         self.setPen(QPen(QColor("#ffffff"), 3))
-        self.setZValue(2)  # Nodes above edges
+        self.setZValue(2)
         
         # Enable interactions only for files
         if node_type == 'file':
@@ -37,30 +37,26 @@ class FileNode(QGraphicsEllipseItem):
             self.setCursor(Qt.CursorShape.PointingHandCursor)
         
     def hoverEnterEvent(self, event):
-        """Highlight and show tooltip"""
         if self.node_type == 'file':
-            self.setPen(QPen(QColor("#FFD700"), 4))  # Gold highlight
+            self.setPen(QPen(QColor("#FFD700"), 4))
             self.setScale(1.2)
             tooltip = self._create_tooltip()
             self.setToolTip(tooltip)
         super().hoverEnterEvent(event)
         
     def hoverLeaveEvent(self, event):
-        """Restore appearance"""
         if self.node_type == 'file':
             self.setPen(QPen(QColor("#ffffff"), 3))
             self.setScale(1.0)
         super().hoverLeaveEvent(event)
         
     def mousePressEvent(self, event):
-        """Open file on click"""
         if event.button() == Qt.MouseButton.LeftButton and self.node_type == 'file':
             file_path = self.file_data['path']
             self._open_file(file_path)
         super().mousePressEvent(event)
         
     def _create_tooltip(self):
-        """Generate rich tooltip"""
         data = self.file_data
         filename = os.path.basename(data['path'])
         file_ext = os.path.splitext(filename)[1].upper()
@@ -97,7 +93,6 @@ class FileNode(QGraphicsEllipseItem):
         return f"{bytes:.1f} TB"
         
     def _open_file(self, file_path):
-        """Open file in default application"""
         try:
             if platform.system() == 'Windows':
                 os.startfile(file_path)
@@ -126,25 +121,27 @@ class GraphView(QGraphicsView):
             QColor("#d35400"), QColor("#c0392b"), QColor("#8e44ad")
         ]
         
-        # Dark modern background
+        self.type_colors = {
+            '.pdf': QColor("#e74c3c"),
+            '.docx': QColor("#3498db"),
+            '.txt': QColor("#2ecc71"),
+            '.doc': QColor("#3498db"),
+        }
+        
         self.setBackgroundBrush(QBrush(QColor("#1a1a2e")))
 
     def update_graph(self, files_data, reduced_coords=None):
-        """Build radial graph with hierarchical edges"""
+        """Build radial graph: Root → Clusters → Types → Files"""
         self.scene.clear()
         if not files_data:
             return
 
-        # Group files by type and cluster
-        type_clusters = defaultdict(lambda: defaultdict(list))
+        # Group by CLUSTER FIRST, then type
+        cluster_groups = defaultdict(lambda: defaultdict(list))
         for file_info in files_data:
-            ext = os.path.splitext(file_info['path'])[1].lower()
             cluster_id = file_info.get('cluster_id', -1)
-            type_clusters[ext][cluster_id].append(file_info)
-        
-        # Calculate positions using radial layout
-        nodes_data = []
-        edges = []
+            ext = os.path.splitext(file_info['path'])[1].lower()
+            cluster_groups[cluster_id][ext].append(file_info)
         
         # Root at center
         root_pos = (0, 0)
@@ -152,7 +149,6 @@ class GraphView(QGraphicsView):
         root_node.setPos(*root_pos)
         self.scene.addItem(root_node)
         
-        # Add root label
         root_label = QGraphicsTextItem("All Files")
         root_label.setDefaultTextColor(QColor("#ffffff"))
         font = QFont("Segoe UI", 12, QFont.Weight.Bold)
@@ -160,69 +156,76 @@ class GraphView(QGraphicsView):
         root_label.setPos(-30, 35)
         self.scene.addItem(root_label)
         
-        # Type level - inner ring
-        type_radius = 200
-        type_nodes = {}
-        type_list = sorted(type_clusters.keys())
-        type_angle_step = 2 * math.pi / max(len(type_list), 1)
+        # CLUSTER level - inner ring
+        cluster_radius = 220
+        cluster_list = sorted(cluster_groups.keys())
+        cluster_angle_step = 2 * math.pi / max(len(cluster_list), 1)
         
-        for i, ext in enumerate(type_list):
-            angle = i * type_angle_step
-            x = type_radius * math.cos(angle)
-            y = type_radius * math.sin(angle)
+        for i, cluster_id in enumerate(cluster_list):
+            angle = i * cluster_angle_step
+            cluster_x = cluster_radius * math.cos(angle)
+            cluster_y = cluster_radius * math.sin(angle)
             
-            color = self.cluster_colors[i % len(self.cluster_colors)]
-            node = FileNode({'path': ext}, color, 'cluster')
-            node.setPos(x, y)
-            self.scene.addItem(node)
-            type_nodes[ext] = (node, (x, y))
+            color = self.cluster_colors[cluster_id % len(self.cluster_colors)]
+            cluster_node = FileNode({'path': f'C{cluster_id}'}, color, 'cluster')
+            cluster_node.setPos(cluster_x, cluster_y)
+            self.scene.addItem(cluster_node)
             
-            # Edge from root to type
-            self._add_edge(root_pos, (x, y), color.lighter(150), 2)
+            # Edge from root to cluster
+            self._add_edge(root_pos, (cluster_x, cluster_y), color.lighter(150), 2)
             
-            # Type label
-            label = QGraphicsTextItem(ext.upper())
+            # Cluster label
+            cluster_name = f"Cluster {cluster_id}"
+            if cluster_groups[cluster_id]:
+                first_file = list(cluster_groups[cluster_id].values())[0][0]
+                cluster_name = first_file.get('cluster_name', cluster_name)
+            
+            label = QGraphicsTextItem(cluster_name)
             label.setDefaultTextColor(color.lighter(160))
             font = QFont("Segoe UI", 9, QFont.Weight.Bold)
             label.setFont(font)
-            label.setPos(x - 15, y + 25)
+            label_width = label.boundingRect().width()
+            label.setPos(cluster_x - label_width/2, cluster_y + 28)
             self.scene.addItem(label)
-        
-        # Cluster and file levels - outer rings
-        cluster_radius = 350
-        file_radius = 500
-        
-        for ext, clusters in type_clusters.items():
-            type_node, type_pos = type_nodes[ext]
             
-            # Calculate angle range for this type
-            type_idx = type_list.index(ext)
-            angle_start = type_idx * type_angle_step - type_angle_step/2
-            angle_end = type_idx * type_angle_step + type_angle_step/2
+            # TYPE level - middle ring (within cluster's arc)
+            type_radius = 380
+            types_in_cluster = sorted(cluster_groups[cluster_id].keys())
             
-            cluster_list = sorted(clusters.keys())
-            cluster_angle_step = (angle_end - angle_start) / max(len(cluster_list), 1)
+            # Calculate angle range for this cluster
+            angle_start = angle - cluster_angle_step/2
+            angle_end = angle + cluster_angle_step/2
+            type_angle_step = (angle_end - angle_start) / max(len(types_in_cluster), 1)
             
-            for j, cluster_id in enumerate(cluster_list):
-                cluster_angle = angle_start + (j + 0.5) * cluster_angle_step
-                cluster_x = cluster_radius * math.cos(cluster_angle)
-                cluster_y = cluster_radius * math.sin(cluster_angle)
+            for j, ext in enumerate(types_in_cluster):
+                type_angle = angle_start + (j + 0.5) * type_angle_step
+                type_x = type_radius * math.cos(type_angle)
+                type_y = type_radius * math.sin(type_angle)
                 
-                color = self.cluster_colors[cluster_id % len(self.cluster_colors)]
-                cluster_node = FileNode({'path': f'C{cluster_id}'}, color, 'cluster')
-                cluster_node.setPos(cluster_x, cluster_y)
-                self.scene.addItem(cluster_node)
+                type_color = self.type_colors.get(ext, QColor("#95a5a6"))
+                type_node = FileNode({'path': ext}, type_color, 'type')
+                type_node.setPos(type_x, type_y)
+                self.scene.addItem(type_node)
                 
-                # Edge from type to cluster
-                self._add_edge(type_pos, (cluster_x, cluster_y), color.lighter(130), 1.5)
+                # Edge from cluster to type
+                self._add_edge((cluster_x, cluster_y), (type_x, type_y), color.lighter(130), 1.5)
                 
-                # File level
-                files = clusters[cluster_id]
+                # Type label
+                type_label = QGraphicsTextItem(ext.upper())
+                type_label.setDefaultTextColor(type_color.lighter(140))
+                font = QFont("Segoe UI", 7, QFont.Weight.Bold)
+                type_label.setFont(font)
+                type_label.setPos(type_x - 10, type_y + 18)
+                self.scene.addItem(type_label)
+                
+                # FILE level - outer ring
+                file_radius = 520
+                files = cluster_groups[cluster_id][ext]
                 file_count = len(files)
-                file_angle_step = cluster_angle_step / max(file_count, 1)
+                file_angle_step = type_angle_step / max(file_count, 1)
                 
-                for k, file_info in enumerate(files[:20]):  # Limit for visual clarity
-                    file_angle = angle_start + j * cluster_angle_step + k * file_angle_step
+                for k, file_info in enumerate(files[:15]):  # Limit for clarity
+                    file_angle = angle_start + j * type_angle_step + k * file_angle_step
                     file_x = file_radius * math.cos(file_angle)
                     file_y = file_radius * math.sin(file_angle)
                     
@@ -230,10 +233,9 @@ class GraphView(QGraphicsView):
                     file_node.setPos(file_x, file_y)
                     self.scene.addItem(file_node)
                     
-                    # Edge from cluster to file
-                    self._add_edge((cluster_x, cluster_y), (file_x, file_y), color.darker(110), 1)
+                    # Edge from type to file
+                    self._add_edge((type_x, type_y), (file_x, file_y), type_color.darker(110), 1)
         
-        # Fit view
         self.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
         
     def _add_edge(self, start, end, color, width):
@@ -241,11 +243,9 @@ class GraphView(QGraphicsView):
         path = QPainterPath()
         path.moveTo(QPointF(*start))
         
-        # Calculate control point for curve
         mid_x = (start[0] + end[0]) / 2
         mid_y = (start[1] + end[1]) / 2
         
-        # Offset control point perpendicular to line
         dx = end[0] - start[0]
         dy = end[1] - start[1]
         length = math.sqrt(dx**2 + dy**2)
@@ -260,12 +260,11 @@ class GraphView(QGraphicsView):
         
         edge = QGraphicsPathItem(path)
         edge.setPen(QPen(color, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        edge.setZValue(0)  # Edges below nodes
+        edge.setZValue(0)
         edge.setOpacity(0.6)
         self.scene.addItem(edge)
 
     def wheelEvent(self, event):
-        """Zoom with mouse wheel"""
         zoom_factor = 1.15
         if event.angleDelta().y() > 0:
             self.scale(zoom_factor, zoom_factor)

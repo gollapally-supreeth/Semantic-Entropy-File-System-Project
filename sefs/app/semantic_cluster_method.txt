@@ -1,0 +1,102 @@
+    def recluster_and_update(self):
+        """
+        SEMANTIC CLUSTERING - Cluster ALL files together by content!
+        1. Get all files regardless of extension
+        2. Cluster ALL together using HDBSCAN + UMAP
+        3. Generate AI names for semantic clusters
+        4. Move files to Cluster/Type structure
+        """
+        import numpy as np
+        
+        # 1. Get ALL files with embeddings
+        rows = self.db.get_all_files()
+        if not rows:
+            return
+
+        all_files = []
+        all_embeddings = []
+        
+        for row in rows:
+            # row: id, path, hash, embedding_blob, cluster_id, last_mod, content_sample
+            if row[3] and len(row[3]) > 2:  # Has valid embedding
+                try:
+                    emb = np.frombuffer(row[3], dtype=np.float32)
+                    all_files.append(row)
+                    all_embeddings.append(emb)
+                except Exception as e:
+                    print(f"DEBUG: Error loading embedding: {e}")
+
+        if not all_files:
+            print("DEBUG: No files with embeddings found")
+            return
+        
+        print(f"DEBUG: Clustering {len(all_files)} files SEMANTICALLY (all types together)")
+        
+        # 2. Cluster ALL files together by semantic content
+        labels = self.clusterer.perform_clustering(all_embeddings)
+        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+        print(f"DEBUG: Found {n_clusters} semantic clusters across all file types")
+        
+        # 3. Generate AI names for each semantic cluster
+        clusters = set(labels)
+        cluster_names = {}  # {cluster_id: "AI_Name"}
+        
+        for cluster_id in clusters:
+            # Get content samples from this cluster
+            content_samples = []
+            for i, lbl in enumerate(labels):
+                if lbl == cluster_id:
+                    row = all_files[i]
+                    if row[6]:  # content_sample
+                        content_samples.append(row[6])
+            
+            print(f"DEBUG: Generating AI name for cluster {cluster_id} with {len(content_samples)} files")
+            
+            # Generate AI name
+            ai_name = self.ai_namer.generate_folder_name(content_samples[:5], cluster_id)
+            cluster_names[cluster_id] = ai_name
+            print(f"DEBUG: Cluster {cluster_id} → '{ai_name}'")
+        
+        # 4. Move files to Cluster/Type structure
+        all_files_data = []
+        
+        for i, row in enumerate(all_files):
+            file_path = os.path.normpath(row[1])
+            new_cluster = int(labels[i])
+            folder_name = cluster_names.get(new_cluster, f"Semantic_Cluster_{new_cluster}")
+            
+            # Update cluster in DB
+            self.db.update_cluster(file_path, new_cluster)
+            
+            # Move file to Cluster/Type/file structure
+            new_path = self.folder_manager.move_file(file_path, folder_name, self.root_path)
+            
+            if new_path and new_path != file_path:
+                # File was moved - update DB path
+                self.db.remove_file(file_path)
+                self.db.upsert_file(
+                    new_path,
+                    row[2],  # hash
+                    row[3],  # embedding
+                    datetime.datetime.now(),
+                    row[6]   # content_sample
+                )
+                self.db.update_cluster(new_path, new_cluster)
+                self.log_signal.emit(f"→ {folder_name}/{os.path.basename(new_path)}")
+                
+                # Update row for UI
+                row = list(row)
+                row[1] = new_path
+                row[4] = new_cluster
+                all_files[i] = tuple(row)
+            
+            # Prepare UI data
+            display_row = list(all_files[i])
+            display_row[4] = new_cluster
+            all_files_data.append(display_row)
+        
+        # 5. Visualization
+        all_coords = self.clusterer.reduce_dimensions(all_embeddings)
+        
+        # 6. Update UI
+        self.update_graph_signal.emit(all_files_data, all_coords)
