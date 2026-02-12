@@ -33,32 +33,49 @@ class ClusteringEngine:
         n_neighbors = min(15, n_samples - 1)
         n_components = min(5, n_samples - 1)
         
-        print(f"DEBUG: UMAP reduction: 768 → {n_components} dimensions")
-        umap_model = umap.UMAP(
-            n_neighbors=n_neighbors,
-            n_components=n_components,
-            metric='cosine',
-            min_dist=0.0,
-            random_state=42
-        )
+        print(f"DEBUG: UMAP reduction: 768 → {n_components} dimensions (neighbors={n_neighbors})")
         
-        reduced_embeddings = umap_model.fit_transform(X)
-        
-        # Step 2: HDBSCAN clustering
-        # Automatically finds optimal number of clusters based on density
-        min_cluster_size = 2 if n_samples < 10 else 3
-        min_samples = 1 if n_samples < 10 else 2
-        
-        print(f"DEBUG: HDBSCAN clustering (min_cluster_size={min_cluster_size})")
-        clusterer = hdbscan.HDBSCAN(
-            min_cluster_size=min_cluster_size,
-            min_samples=min_samples,
-            metric='euclidean',
-            cluster_selection_method='eom',  # Excess of Mass
-            prediction_data=True
-        )
-        
-        labels = clusterer.fit_predict(reduced_embeddings)
+        # Check for NaNs or Inf
+        if not np.isfinite(X).all():
+            print("ERROR: Embeddings contains NaNs or Infinities!")
+            return [-1] * n_samples
+
+        try:
+            # For small datasets, 'spectral' init can fail or be unstable
+            init_method = 'spectral' if n_samples > 10 else 'random'
+            
+            umap_model = umap.UMAP(
+                n_neighbors=n_neighbors,
+                n_components=n_components,
+                metric='cosine',
+                min_dist=0.0,
+                random_state=42,
+                init=init_method
+            )
+            
+            reduced_embeddings = umap_model.fit_transform(X)
+            
+            # Step 2: HDBSCAN clustering
+            # Automatically finds optimal number of clusters based on density
+            min_cluster_size = 2 if n_samples < 10 else 3
+            min_samples = 1 if n_samples < 10 else 2
+            
+            print(f"DEBUG: HDBSCAN clustering (min_cluster_size={min_cluster_size}, min_samples={min_samples})")
+            clusterer = hdbscan.HDBSCAN(
+                min_cluster_size=min_cluster_size,
+                min_samples=min_samples,
+                metric='euclidean',
+                cluster_selection_method='eom',  # Excess of Mass
+                prediction_data=True
+            )
+            
+            labels = clusterer.fit_predict(reduced_embeddings)
+        except Exception as e:
+            print(f"ERROR: Clustering failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            # Return all as noise if clustering fails
+            return [-1] * n_samples
         
         # Step 3: Quality metrics
         n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
@@ -111,7 +128,9 @@ class ClusteringEngine:
             return [(0.0, 0.0)] * n_samples
 
         # Use UMAP for better visualization
-        n_neighbors = min(15, n_samples - 1)
+        # UMAP needs at least 2 neighbors and n_samples > n_components
+        n_neighbors = max(2, min(15, n_samples - 1))
+        init_method = 'spectral' if n_samples > 10 else 'random'
         
         try:
             umap_model = umap.UMAP(
@@ -119,7 +138,8 @@ class ClusteringEngine:
                 n_components=2,
                 metric='cosine',
                 min_dist=0.1,
-                random_state=42
+                random_state=42,
+                init=init_method
             )
             reduced = umap_model.fit_transform(X)
             return reduced.tolist()

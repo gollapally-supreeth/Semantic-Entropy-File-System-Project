@@ -43,7 +43,9 @@ class AINamer:
         if not self.enabled:
             return f"Semantic_Cluster_{cluster_id}"
         
-        # Validate input
+        # Explicit handling for Noise/Unclassified cluster
+        if cluster_id == -1:
+            return "Miscellaneous_Files"
         if not text_samples or not isinstance(text_samples, list):
             print(f"WARNING: Invalid text_samples for cluster {cluster_id}")
             return f"Semantic_Cluster_{cluster_id}"
@@ -67,42 +69,58 @@ class AINamer:
         if cache_key in self.cache:
             return self.cache[cache_key]
         
-        try:
-            combined_text = "\n\n---\n\n".join(valid_samples)
-            prompt = f"""Analyze these document excerpts and suggest ONE concise folder name (2-3 words max) that captures the main topic.
-
-Documents:
+        max_retries = 3
+        retry_delay = 5  # Base delay in seconds
+        
+        for attempt in range(max_retries):
+            try:
+                print(f"  [AI] Analyzing cluster {cluster_id} (Attempt {attempt+1}/{max_retries})...")
+                combined_text = "\n\n---\n\n".join(valid_samples)
+                prompt = f"""Suggest ONE concise folder name (2-3 words max) for these document excerpts.
+                
+Docs:
 {combined_text[:1500]}
 
 Rules:
-- Use underscore_case (e.g., Financial_Reports, Space_Research, Medical_Records)
-- Be VERY specific and descriptive
-- Maximum 3 words
-- NO special characters except underscores
-- NO file extensions
-- Respond with ONLY the folder name, nothing else
+- Format: Word_Word (Underscore case)
+- Descriptive and specific
+- Max 3 words, NO extensions, NO special chars except _
+- Respond with ONLY the name.
 
-Folder name:"""
+Name:"""
 
-            print(f"  Calling Gemini API...")
-            response = self.model.generate_content(prompt)
-            name = response.text.strip()
-            print(f"  API Response: '{name}'")
-            
-            # Clean and validate
-            name = self._sanitize_name(name)
-            
-            if name and len(name) > 2 and len(name) < 60:
-                self.cache[cache_key] = name
-                print(f"  ✓ AI Named: '{name}'")
-                return name
-            else:
-                print(f"  ✗ Invalid AI response, using fallback")
-                return f"Semantic_Cluster_{cluster_id}"
+                print(f"  [AI] Requesting name from {Config.GEMINI_MODEL}...")
+                response = self.model.generate_content(prompt)
                 
-        except Exception as e:
-            print(f"  ✗ AI Naming Error: {type(e).__name__}: {str(e)}")
-            return f"Semantic_Cluster_{cluster_id}"
+                if not response or not response.text:
+                    print(f"  [AI] Empty response from API")
+                    return f"Semantic_Cluster_{cluster_id}"
+                    
+                name = response.text.strip()
+                print(f"  [AI] Gemini suggested: '{name}'")
+                
+                # Clean and validate
+                name = self._sanitize_name(name)
+                
+                if name and len(name) > 2 and len(name) < 60:
+                    self.cache[cache_key] = name
+                    print(f"  ✓ AI Named: '{name}'")
+                    return name
+                else:
+                    return f"Semantic_Cluster_{cluster_id}"
+                    
+            except Exception as e:
+                error_str = str(e)
+                if "429" in error_str or "ResourceExhausted" in error_str:
+                    print(f"  [AI] Rate limit hit. Waiting {retry_delay}s... (Attempt {attempt+1})")
+                    import time
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    print(f"  ✗ AI Naming Error: {type(e).__name__}: {error_str}")
+                    break
+        
+        return f"Semantic_Cluster_{cluster_id}"
     
     def _sanitize_name(self, name):
         """Clean up AI-generated name"""

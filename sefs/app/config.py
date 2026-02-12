@@ -16,9 +16,9 @@ class Config:
     DBSCAN_MIN_SAMPLES = 2  # Increased to 2 for more stable clusters
     
     # AI Naming Configuration
-    USE_AI_NAMING = False  # Temporarily disabled due to API compatibility issues
+    USE_AI_NAMING = True  # Enabled for semantic naming
     GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')  # Set via environment variable
-    GEMINI_MODEL = 'gemini-pro'  # Free tier stable model
+    GEMINI_MODEL = 'gemini-2.5-flash'  # Upgraded to 1.5 Flash for better accuracy and speed
     
     # We restrict to text-readable files for semantic analysis
     EXTENSIONS = ['.txt', '.pdf', '.md', '.log', '.csv', '.docx', '.doc']

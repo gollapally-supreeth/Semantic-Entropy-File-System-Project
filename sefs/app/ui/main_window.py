@@ -69,22 +69,25 @@ class MainWindow(QMainWindow):
             self.stop_monitoring_signal.emit()
             self.log_panel.add_log("Monitoring stopped.")
 
-    @pyqtSlot(object, object)
-    def update_graph_display(self, files_data, reduced_coords):
-        """Update graph visualization with file data and coordinates"""
+    @pyqtSlot(object, object, object)
+    def update_graph_display(self, files_data, reduced_coords, cluster_names=None):
+        """Update graph visualization with file data, coordinates and AI names"""
         if not files_data or not reduced_coords:
             return
+            
+        cluster_names = cluster_names or {}
             
         # Convert tuple data to dict format for graph view
         formatted_data = []
         for file_info in files_data:
             if isinstance(file_info, (list, tuple)):
                 # Format: (id, path, hash, embedding, cluster_id, last_modified, content_sample)
+                c_id = file_info[4]
                 file_dict = {
                     'path': file_info[1],
-                    'cluster_id': file_info[4],
+                    'cluster_id': c_id,
                     'content_sample': file_info[6] if len(file_info) > 6 else '',
-                    'cluster_name': f"Cluster {file_info[4]}"
+                    'cluster_name': cluster_names.get(c_id, f"Cluster {c_id}")
                 }
                 formatted_data.append(file_dict)
             else:

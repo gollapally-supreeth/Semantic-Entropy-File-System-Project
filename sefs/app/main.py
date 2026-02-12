@@ -21,7 +21,7 @@ load_dotenv()
 
 class Worker(QThread):
     log_signal = pyqtSignal(str)
-    update_graph_signal = pyqtSignal(object, object) # files_data, reduced_coords
+    update_graph_signal = pyqtSignal(object, object, object) # files_data, reduced_coords, cluster_names
 
     def __init__(self, root_path):
         super().__init__()
@@ -73,24 +73,27 @@ class Worker(QThread):
         self.wait()
 
     def scan_existing_files(self):
-        self.log_signal.emit("Scanning existing files...")
+        self.log_signal.emit("Scanning directory...")
         valid_files = []
         
-        # Only scan the root level, not nested folders we created
-        for item in os.listdir(self.root_path):
-            item_path = os.path.join(self.root_path, item)
-            
-            # Skip directories (our organized folders)
-            if os.path.isdir(item_path):
-                continue
-            
-            # Skip hidden/system files
-            if item.startswith('.') or item.endswith('.tmp') or 'sefs.db' in item:
+        # Recursive scan to find all supported files
+        for root, dirs, files in os.walk(self.root_path):
+            # Skip the .gemini or other hidden folders often ignored
+            if '.gemini' in root or '.git' in root:
                 continue
                 
-            valid_files.append(os.path.normpath(item_path))
+            for file in files:
+                # Skip hidden/system files
+                if file.startswith('.') or file.endswith('.tmp') or 'sefs.db' in file:
+                    continue
+                
+                # Check extension
+                ext = os.path.splitext(file)[1].lower()
+                if ext in Config.EXTENSIONS:
+                    file_path = os.path.normpath(os.path.join(root, file))
+                    valid_files.append(file_path)
         
-        print(f"DEBUG: Found {len(valid_files)} files in root directory")
+        print(f"DEBUG: Found {len(valid_files)} total files in directory")
         
         for file_path in valid_files:
             self.process_file(file_path)
@@ -98,6 +101,7 @@ class Worker(QThread):
         # Clean up DB entries for files that no longer exist
         self._cleanup_missing_files()
         
+        # First clustering
         self.recluster_and_update()
     
     def _cleanup_missing_files(self):
@@ -120,42 +124,38 @@ class Worker(QThread):
         if ext not in Config.EXTENSIONS:
             return
         
-        # CRITICAL: Ignore ALL events for files in organized subfolders
-        # This prevents infinite loop during file organization
-        relative_path = os.path.relpath(path, self.root_path)
-        path_parts = relative_path.split(os.sep)
-        
-        # If file is in a subfolder (organized), completely ignore it
-        if len(path_parts) > 1:
-            print(f"DEBUG: Ignoring {event_type} event for organized file: {os.path.basename(path)}")
-            return
-        
+        # For 'created' or 'moved', check if this is an AI organization move
+        # We can detect this by seeing if the file is already in a sub-subfolder (Cluster/Type/File)
+        # and its content hash is already in the database with that path.
+        if event_type in ["created", "moved"]:
+            existing = self.db.get_file(path)
+            if existing:
+                # File already exists at this path in DB, likely moved there by us
+                # or just a redundant OS event. Skip to prevent loop.
+                return
+
         self.log_signal.emit(f"Event: {event_type} - {os.path.basename(path)}")
         
-        if event_type == "created":
+        if event_type in ["created", "moved"]:
             # Add small delay to ensure file write is complete
             time.sleep(0.5)
             if os.path.exists(path):
                 self.process_file(path)
                 self.recluster_and_update()
         elif event_type == "modified":
-            # Check if file content actually changed by comparing hash
+            # Check if file content actually changed
             existing = self.db.get_file(path)
             if existing:
                 new_hash = self.embedder.compute_file_hash(path)
-                if new_hash == existing[2]:  # Hash unchanged
-                    print(f"DEBUG: Modification detected but content unchanged for {path}")
+                if new_hash == existing[2]:
                     return
-            # Content changed, reprocess
+            
             if os.path.exists(path):
                 self.process_file(path)
                 self.recluster_and_update()
         elif event_type == "deleted":
-            # DON'T recluster on delete - it's probably a file being moved to organized folder
-            # Only remove from DB
-            print(f"DEBUG: File deleted from root: {os.path.basename(path)}")
+            # Just remove from DB, don't recluster immediately to avoid noise
             self.db.remove_file(path)
-            # NO RECLUSTER HERE - prevents loop!
 
     def process_file(self, file_path):
         # Normalize path
@@ -310,7 +310,7 @@ class Worker(QThread):
         all_coords = self.clusterer.reduce_dimensions(all_embeddings)
         
         # 5. Update UI
-        self.update_graph_signal.emit(all_files_data, all_coords)
+        self.update_graph_signal.emit(all_files_data, all_coords, cluster_names)
 
 
 class SEFSService:
